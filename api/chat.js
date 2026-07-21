@@ -29,27 +29,43 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  const models = [
-    "gemini-2.5-flash",
-    "gemini-2.5-flash-lite",
-    "gemini-2.0-flash",
-    "gemini-2.0-flash-lite",
-    "gemini-1.5-flash",
-  ];
+  // Step 1: Discover available models
+  let availableModels = [];
+  try {
+    const listRes = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
+    );
+    if (listRes.ok) {
+      const listData = await listRes.json();
+      availableModels = (listData.models || [])
+        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
+        .map((m) => m.name.replace("models/", ""));
+      console.log("Available models:", availableModels);
+    } else {
+      console.error("Failed to list models:", listRes.status);
+    }
+  } catch (err) {
+    console.error("Error listing models:", err.message);
+  }
 
-  for (const model of models) {
+  if (availableModels.length === 0) {
+    return res.status(502).json({ error: "No models found for this API key. Check your Google AI Studio project." });
+  }
+
+  // Step 2: Try each available model
+  const geminiBody = {
+    contents,
+    systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.95,
+      maxOutputTokens: 1024,
+      thinkingConfig: { thinkingBudget: 0 },
+    },
+  };
+
+  for (const model of availableModels) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
-
-    const geminiBody = {
-      contents,
-      systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.95,
-        maxOutputTokens: 1024,
-        thinkingConfig: { thinkingBudget: 0 },
-      },
-    };
 
     try {
       const response = await fetch(url, {
@@ -60,7 +76,7 @@ module.exports = async function handler(req, res) {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error(`Gemini ${model} error:`, response.status, errText);
+        console.error(`${model} error:`, response.status, errText.slice(0, 200));
         continue;
       }
 
@@ -73,18 +89,19 @@ module.exports = async function handler(req, res) {
         .trim();
 
       if (!reply) {
-        console.error(`Gemini ${model}: empty reply`, JSON.stringify(data).slice(0, 500));
+        console.error(`${model}: empty reply`);
         continue;
       }
 
+      console.log(`Success with model: ${model}`);
       return res.status(200).json({ reply });
     } catch (err) {
-      console.error(`Gemini ${model} exception:`, err.message);
+      console.error(`${model} exception:`, err.message);
       continue;
     }
   }
 
   return res.status(502).json({
-    error: "No Gemini model responded successfully. Check Vercel function logs.",
+    error: `None of ${availableModels.length} available models responded. Models tried: ${availableModels.join(", ")}`,
   });
 };
