@@ -29,8 +29,13 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  const model = "gemini-3.1-flash-life";
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
+  const models = [
+    "gemini-2.5-flash",
+    "gemini-2.5-flash-lite",
+    "gemini-2.0-flash",
+    "gemini-2.0-flash-lite",
+    "gemini-1.5-flash",
+  ];
 
   const geminiBody = {
     contents,
@@ -43,11 +48,12 @@ module.exports = async function handler(req, res) {
   };
 
   const bodyStr = JSON.stringify(geminiBody);
-  console.log("Request tokens (est):", Math.ceil(bodyStr.length / 4));
 
-  for (let attempt = 0; attempt < 2; attempt++) {
+  for (const model of models) {
+    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
     try {
-      const response = await fetch(`${url}?key=${apiKey}`, {
+      const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: bodyStr,
@@ -55,33 +61,23 @@ module.exports = async function handler(req, res) {
 
       if (!response.ok) {
         const errText = await response.text();
-        console.error("Gemini API error:", response.status, errText);
-
-        if (response.status === 429 && attempt === 0) {
-          await new Promise(r => setTimeout(r, 2000));
-          continue;
-        }
-
-        let detail = `Gemini API error (${response.status})`;
-        try {
-          const errJson = JSON.parse(errText);
-          detail = errJson?.error?.message || detail;
-        } catch {}
-
-        return res.status(502).json({ error: detail });
+        console.error(`Gemini ${model} error:`, response.status, errText);
+        continue;
       }
 
       const data = await response.json();
       const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
 
-      if (!reply) {
-        return res.status(502).json({ error: "Empty response from Gemini" });
-      }
+      if (!reply) continue;
 
       return res.status(200).json({ reply });
     } catch (err) {
-      console.error("Server error:", err);
-      return res.status(500).json({ error: "Internal server error" });
+      console.error(`Gemini ${model} exception:`, err.message);
+      continue;
     }
   }
+
+  return res.status(502).json({
+    error: "None of the available Gemini models worked. Check Vercel logs for details.",
+  });
 };
