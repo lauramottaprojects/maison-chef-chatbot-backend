@@ -29,7 +29,7 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  const model = "antigravity";
+  const model = "gemini-3.1-flash-life";
   const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
   const geminiBody = {
