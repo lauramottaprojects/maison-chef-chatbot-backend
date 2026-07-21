@@ -37,26 +37,25 @@ module.exports = async function handler(req, res) {
     "gemini-1.5-flash",
   ];
 
-  const geminiBody = {
-    contents,
-    systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-    generationConfig: {
-      temperature: 0.7,
-      topP: 0.95,
-      maxOutputTokens: 1024,
-    },
-  };
-
-  const bodyStr = JSON.stringify(geminiBody);
-
   for (const model of models) {
     const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+
+    const geminiBody = {
+      contents,
+      systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+      generationConfig: {
+        temperature: 0.7,
+        topP: 0.95,
+        maxOutputTokens: 1024,
+        thinkingConfig: { thinkingBudget: 0 },
+      },
+    };
 
     try {
       const response = await fetch(url, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: bodyStr,
+        body: JSON.stringify(geminiBody),
       });
 
       if (!response.ok) {
@@ -66,9 +65,17 @@ module.exports = async function handler(req, res) {
       }
 
       const data = await response.json();
-      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+      const parts = data.candidates?.[0]?.content?.parts || [];
+      const reply = parts
+        .filter((p) => !p.thought)
+        .map((p) => p.text)
+        .join("")
+        .trim();
 
-      if (!reply) continue;
+      if (!reply) {
+        console.error(`Gemini ${model}: empty reply`, JSON.stringify(data).slice(0, 500));
+        continue;
+      }
 
       return res.status(200).json({ reply });
     } catch (err) {
@@ -78,6 +85,6 @@ module.exports = async function handler(req, res) {
   }
 
   return res.status(502).json({
-    error: "None of the available Gemini models worked. Check Vercel logs for details.",
+    error: "No Gemini model responded successfully. Check Vercel function logs.",
   });
 };
