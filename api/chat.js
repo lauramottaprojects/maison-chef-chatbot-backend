@@ -29,30 +29,9 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  // Step 1: Discover available models
-  let availableModels = [];
-  try {
-    const listRes = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models?key=${apiKey}`
-    );
-    if (listRes.ok) {
-      const listData = await listRes.json();
-      availableModels = (listData.models || [])
-        .filter((m) => m.supportedGenerationMethods?.includes("generateContent"))
-        .map((m) => m.name.replace("models/", ""));
-      console.log("Available models:", availableModels);
-    } else {
-      console.error("Failed to list models:", listRes.status);
-    }
-  } catch (err) {
-    console.error("Error listing models:", err.message);
-  }
+  const model = "gemini-3-flash-preview";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
 
-  if (availableModels.length === 0) {
-    return res.status(502).json({ error: "No models found for this API key. Check your Google AI Studio project." });
-  }
-
-  // Step 2: Try each available model
   const geminiBody = {
     contents,
     systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
@@ -64,44 +43,39 @@ module.exports = async function handler(req, res) {
     },
   };
 
-  for (const model of availableModels) {
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  try {
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(geminiBody),
+    });
 
-    try {
-      const response = await fetch(url, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(geminiBody),
-      });
-
-      if (!response.ok) {
-        const errText = await response.text();
-        console.error(`${model} error:`, response.status, errText.slice(0, 200));
-        continue;
-      }
-
-      const data = await response.json();
-      const parts = data.candidates?.[0]?.content?.parts || [];
-      const reply = parts
-        .filter((p) => !p.thought)
-        .map((p) => p.text)
-        .join("")
-        .trim();
-
-      if (!reply) {
-        console.error(`${model}: empty reply`);
-        continue;
-      }
-
-      console.log(`Success with model: ${model}`);
-      return res.status(200).json({ reply });
-    } catch (err) {
-      console.error(`${model} exception:`, err.message);
-      continue;
+    if (!response.ok) {
+      const errText = await response.text();
+      console.error("Gemini API error:", response.status, errText);
+      let detail = `Gemini API error (${response.status})`;
+      try {
+        const errJson = JSON.parse(errText);
+        detail = errJson?.error?.message || detail;
+      } catch {}
+      return res.status(502).json({ error: detail });
     }
-  }
 
-  return res.status(502).json({
-    error: `None of ${availableModels.length} available models responded. Models tried: ${availableModels.join(", ")}`,
-  });
+    const data = await response.json();
+    const parts = data.candidates?.[0]?.content?.parts || [];
+    const reply = parts
+      .filter((p) => !p.thought)
+      .map((p) => p.text)
+      .join("")
+      .trim();
+
+    if (!reply) {
+      return res.status(502).json({ error: "Empty response from Gemini" });
+    }
+
+    return res.status(200).json({ reply });
+  } catch (err) {
+    console.error("Server error:", err);
+    return res.status(500).json({ error: "Internal server error" });
+  }
 };
