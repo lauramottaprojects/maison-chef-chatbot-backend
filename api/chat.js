@@ -29,43 +29,59 @@ module.exports = async function handler(req, res) {
     return res.status(500).json({ error: "Server misconfiguration: missing API key" });
   }
 
-  try {
-    const model = "gemini-2.0-flash";
-    const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${apiKey}`;
+  const model = "gemini-2.0-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`;
 
-    const geminiBody = {
-      contents,
-      systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
-      generationConfig: {
-        temperature: 0.7,
-        topP: 0.95,
-        maxOutputTokens: 1024,
-      },
-    };
+  const geminiBody = {
+    contents,
+    systemInstruction: systemPrompt ? { parts: [{ text: systemPrompt }] } : undefined,
+    generationConfig: {
+      temperature: 0.7,
+      topP: 0.95,
+      maxOutputTokens: 1024,
+    },
+  };
 
-    const response = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(geminiBody),
-    });
+  const bodyStr = JSON.stringify(geminiBody);
+  console.log("Request tokens (est):", Math.ceil(bodyStr.length / 4));
 
-    if (!response.ok) {
-      const errText = await response.text();
-      console.error("Gemini API error:", response.status, errText);
-      return res.status(502).json({ error: "Gemini API request failed" });
+  for (let attempt = 0; attempt < 2; attempt++) {
+    try {
+      const response = await fetch(`${url}?key=${apiKey}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: bodyStr,
+      });
+
+      if (!response.ok) {
+        const errText = await response.text();
+        console.error("Gemini API error:", response.status, errText);
+
+        if (response.status === 429 && attempt === 0) {
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+
+        let detail = `Gemini API error (${response.status})`;
+        try {
+          const errJson = JSON.parse(errText);
+          detail = errJson?.error?.message || detail;
+        } catch {}
+
+        return res.status(502).json({ error: detail });
+      }
+
+      const data = await response.json();
+      const reply = data.candidates?.[0]?.content?.parts?.[0]?.text || "";
+
+      if (!reply) {
+        return res.status(502).json({ error: "Empty response from Gemini" });
+      }
+
+      return res.status(200).json({ reply });
+    } catch (err) {
+      console.error("Server error:", err);
+      return res.status(500).json({ error: "Internal server error" });
     }
-
-    const data = await response.json();
-    const reply =
-      data.candidates?.[0]?.content?.parts?.[0]?.text || "";
-
-    if (!reply) {
-      return res.status(502).json({ error: "Empty response from Gemini" });
-    }
-
-    return res.status(200).json({ reply });
-  } catch (err) {
-    console.error("Server error:", err);
-    return res.status(500).json({ error: "Internal server error" });
   }
 };
